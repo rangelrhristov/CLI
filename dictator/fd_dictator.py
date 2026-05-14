@@ -27,6 +27,9 @@ INPUT_KEYBOARD = 1
 KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_UNICODE = 0x0004
 VK_RETURN = 0x0D
+VK_CONTROL = 0x11
+VK_LWIN = 0x5B
+VK_RWIN = 0x5C
 
 
 class KEYBDINPUT(ctypes.Structure):
@@ -104,9 +107,26 @@ def get_window_pid(hwnd):
 
 def restore_window(hwnd):
     if hwnd:
-        user32.ShowWindow(hwnd, SW_RESTORE)
+        if user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, SW_RESTORE)
         user32.SetForegroundWindow(hwnd)
         time.sleep(0.08)
+
+
+def is_key_down(vk):
+    return bool(user32.GetAsyncKeyState(vk) & 0x8000)
+
+
+def wait_for_dictation_hotkey_release(timeout=2.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not (
+            is_key_down(VK_CONTROL)
+            or is_key_down(VK_LWIN)
+            or is_key_down(VK_RWIN)
+        ):
+            return
+        time.sleep(0.02)
 
 
 def clean_transcript(text):
@@ -329,6 +349,7 @@ class DictatorApp:
                 self.post(lambda: self.set_status("no speech", "#ff7575"))
                 return
 
+            wait_for_dictation_hotkey_release()
             restore_window(target_hwnd)
             type_text(text)
             self.post(lambda: self.set_status("typed", "#12d6e7"))
