@@ -112,6 +112,9 @@ internal sealed class HostForm : Form
     private readonly Label inputStatus = new Label();
     private readonly System.Windows.Forms.Timer focusGuardTimer = new System.Windows.Forms.Timer();
     private bool forwardingDictationText;
+    private DateTime dictationPasteBridgeUntil = DateTime.MinValue;
+    private string lastBridgeText = "";
+    private DateTime lastBridgeTextAt = DateTime.MinValue;
     private KeyboardForwarder keyboardForwarder;
     private MousePaneActivator mousePaneActivator;
     private EmbeddedTerminal activeTerminal;
@@ -195,9 +198,10 @@ internal sealed class HostForm : Form
         dictationBox.BackColor = Color.FromArgb(3, 4, 5);
         dictationBox.ForeColor = Color.FromArgb(3, 4, 5);
         dictationBox.Font = new Font("Segoe UI", 9, FontStyle.Regular);
-        dictationBox.Location = new Point(-2000, -2000);
-        dictationBox.Size = new Size(4, 4);
+        dictationBox.Location = new Point(354, 8);
+        dictationBox.Size = new Size(2, 16);
         dictationBox.TabStop = true;
+        dictationBox.AccessibleName = "CLI dictation input";
         dictationBox.TextChanged += delegate { ForwardDictationText(); };
         dictationBox.KeyDown += delegate(object sender, KeyEventArgs e)
         {
@@ -267,6 +271,27 @@ internal sealed class HostForm : Form
         keyboardForwarder = new KeyboardForwarder(this, terminals);
         mousePaneActivator = new MousePaneActivator(this, terminals);
         MarkInitialTerminalActive();
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        NativeMethods.AddClipboardFormatListener(Handle);
+    }
+
+    protected override void OnHandleDestroyed(EventArgs e)
+    {
+        NativeMethods.RemoveClipboardFormatListener(Handle);
+        base.OnHandleDestroyed(e);
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == NativeMethods.WM_CLIPBOARDUPDATE)
+        {
+            HandleClipboardUpdate();
+        }
+        base.WndProc(ref m);
     }
 
     protected override void OnActivated(EventArgs e)
@@ -678,6 +703,82 @@ internal sealed class HostForm : Form
         return terminals.Any(terminal => terminal.OwnsWindow(foreground));
     }
 
+    public void ArmDictationPasteBridge()
+    {
+        dictationPasteBridgeUntil = DateTime.UtcNow.AddSeconds(25);
+        if (!IsDisposed && !IsRenamingPane())
+        {
+            try
+            {
+                BeginInvoke((MethodInvoker)FocusDictationInput);
+            }
+            catch
+            {
+                // The app can be closing while a global shortcut is released.
+            }
+        }
+    }
+
+    private void HandleClipboardUpdate()
+    {
+        var now = DateTime.UtcNow;
+        if (now > dictationPasteBridgeUntil)
+        {
+            return;
+        }
+
+        var terminal = ActiveTerminal;
+        if (terminal == null)
+        {
+            return;
+        }
+
+        var text = ReadClipboardTextWithRetry();
+        if (string.IsNullOrEmpty(text))
+        {
+            return;
+        }
+
+        if ((now - lastBridgeTextAt).TotalSeconds < 4 && text == lastBridgeText)
+        {
+            dictationPasteBridgeUntil = DateTime.MinValue;
+            return;
+        }
+
+        if (terminal.HasRecentlyForwardedText(text))
+        {
+            dictationPasteBridgeUntil = DateTime.MinValue;
+            return;
+        }
+
+        if (terminal.ForwardText(text))
+        {
+            lastBridgeText = text;
+            lastBridgeTextAt = now;
+            dictationPasteBridgeUntil = DateTime.MinValue;
+        }
+    }
+
+    private static string ReadClipboardTextWithRetry()
+    {
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            try
+            {
+                if (Clipboard.ContainsText())
+                {
+                    return Clipboard.GetText();
+                }
+            }
+            catch
+            {
+                // Wispr briefly owns the clipboard while it swaps in the transcript.
+            }
+            Thread.Sleep(25);
+        }
+        return "";
+    }
+
     public void FocusDictationInput()
     {
         if (!dictationBox.IsDisposed && !dictationBox.Focused && !IsRenamingPane())
@@ -831,6 +932,8 @@ internal sealed class EmbeddedTerminal
     private DateTime taskStartedAt;
     private DateTime lastKeyboardAt;
     private DateTime lastCpuMovedAt;
+    private string lastForwardedText = "";
+    private DateTime lastForwardedTextAt = DateTime.MinValue;
     private TimeSpan lastCpu = TimeSpan.MinValue;
     private int flashTicks;
 
@@ -1252,25 +1355,44 @@ internal sealed class EmbeddedTerminal
 
             NativeMethods.PostMessage(target, NativeMethods.WM_CHAR, (IntPtr)(ch == '\r' ? '\r' : ch), IntPtr.Zero);
         }
+        NoteForwardedText(text);
         NoteForwardedKey(text.IndexOf('\r') >= 0 || text.IndexOf('\n') >= 0 ? NativeMethods.VK_RETURN : NativeMethods.VK_V);
         return true;
     }
 
+    public bool HasRecentlyForwardedText(string text)
+    {
+        return !string.IsNullOrEmpty(text) &&
+               text == lastForwardedText &&
+               (DateTime.UtcNow - lastForwardedTextAt).TotalSeconds < 4;
+    }
+
+    private void NoteForwardedText(string text)
+    {
+        lastForwardedText = text;
+        lastForwardedTextAt = DateTime.UtcNow;
+    }
+
     private static bool IsPasteShortcut(int virtualKey)
     {
-        return (virtualKey == NativeMethods.VK_V && Control.ModifierKeys.HasFlag(Keys.Control)) ||
-               (virtualKey == NativeMethods.VK_INSERT && Control.ModifierKeys.HasFlag(Keys.Shift));
+        return (virtualKey == NativeMethods.VK_V && IsModifierDown(NativeMethods.VK_CONTROL)) ||
+               (virtualKey == NativeMethods.VK_INSERT && IsModifierDown(NativeMethods.VK_SHIFT));
     }
 
     private static bool IsBlockedCodexShortcut(int virtualKey)
     {
-        if (!Control.ModifierKeys.HasFlag(Keys.Control))
+        if (!IsModifierDown(NativeMethods.VK_CONTROL))
         {
             return false;
         }
 
         return virtualKey == NativeMethods.VK_C ||
                virtualKey == NativeMethods.VK_L;
+    }
+
+    private static bool IsModifierDown(int virtualKey)
+    {
+        return (NativeMethods.GetAsyncKeyState(virtualKey) & 0x8000) != 0;
     }
 
     private bool TryPasteClipboardText(IntPtr target)
@@ -1293,6 +1415,7 @@ internal sealed class EmbeddedTerminal
                 var normalized = ch == '\r' ? '\r' : ch;
                 NativeMethods.PostMessage(target, NativeMethods.WM_CHAR, (IntPtr)normalized, IntPtr.Zero);
             }
+            NoteForwardedText(text);
             NoteForwardedKey(text.IndexOf('\r') >= 0 || text.IndexOf('\n') >= 0 ? NativeMethods.VK_RETURN : NativeMethods.VK_V);
             return true;
         }
@@ -1595,7 +1718,13 @@ internal sealed class KeyboardForwarder : IDisposable
         }
 
         var data = (NativeMethods.KbdLlHookStruct)Marshal.PtrToStructure(lParam, typeof(NativeMethods.KbdLlHookStruct));
-        if (IsWindowsSystemShortcut((int)data.vkCode))
+        var virtualKey = (int)data.vkCode;
+        if (IsWisprDictationShortcut(virtualKey))
+        {
+            host.ArmDictationPasteBridge();
+        }
+
+        if (!IsCodexConflictShortcut(virtualKey) && IsWindowsSystemShortcut(virtualKey))
         {
             return NativeMethods.CallNextHookEx(hook, code, wParam, lParam);
         }
@@ -1620,7 +1749,7 @@ internal sealed class KeyboardForwarder : IDisposable
         }
 
         var terminal = host.ActiveTerminal;
-        if (terminal != null && terminal.ForwardKey((int)data.vkCode))
+        if (terminal != null && terminal.ForwardKey(virtualKey))
         {
             return (IntPtr)1;
         }
@@ -1628,12 +1757,34 @@ internal sealed class KeyboardForwarder : IDisposable
         return NativeMethods.CallNextHookEx(hook, code, wParam, lParam);
     }
 
+    private static bool IsWisprDictationShortcut(int virtualKey)
+    {
+        var ctrlDown = IsKeyDown(NativeMethods.VK_CONTROL);
+        var shiftDown = IsKeyDown(NativeMethods.VK_SHIFT);
+        var altDown = IsKeyDown(NativeMethods.VK_MENU);
+        var winDown = IsKeyDown(NativeMethods.VK_LWIN) || IsKeyDown(NativeMethods.VK_RWIN);
+
+        return (ctrlDown && winDown) ||
+               (altDown && shiftDown && virtualKey == NativeMethods.VK_Z) ||
+               (winDown && altDown && virtualKey == NativeMethods.VK_S);
+    }
+
+    private static bool IsCodexConflictShortcut(int virtualKey)
+    {
+        var ctrlDown = IsKeyDown(NativeMethods.VK_CONTROL);
+        var shiftDown = IsKeyDown(NativeMethods.VK_SHIFT);
+
+        return (ctrlDown &&
+                (virtualKey == NativeMethods.VK_V ||
+                 virtualKey == NativeMethods.VK_C ||
+                 virtualKey == NativeMethods.VK_L)) ||
+               (shiftDown && virtualKey == NativeMethods.VK_INSERT);
+    }
+
     private static bool IsWindowsSystemShortcut(int virtualKey)
     {
-        var altDown = (NativeMethods.GetAsyncKeyState(NativeMethods.VK_MENU) & 0x8000) != 0;
-        var winDown =
-            (NativeMethods.GetAsyncKeyState(NativeMethods.VK_LWIN) & 0x8000) != 0 ||
-            (NativeMethods.GetAsyncKeyState(NativeMethods.VK_RWIN) & 0x8000) != 0;
+        var altDown = IsKeyDown(NativeMethods.VK_MENU);
+        var winDown = IsKeyDown(NativeMethods.VK_LWIN) || IsKeyDown(NativeMethods.VK_RWIN);
 
         if (winDown || virtualKey == NativeMethods.VK_LWIN || virtualKey == NativeMethods.VK_RWIN)
         {
@@ -1649,6 +1800,11 @@ internal sealed class KeyboardForwarder : IDisposable
                virtualKey == NativeMethods.VK_ESCAPE ||
                virtualKey == NativeMethods.VK_F4 ||
                virtualKey == NativeMethods.VK_MENU;
+    }
+
+    private static bool IsKeyDown(int virtualKey)
+    {
+        return (NativeMethods.GetAsyncKeyState(virtualKey) & 0x8000) != 0;
     }
 }
 
@@ -1921,6 +2077,7 @@ internal static class NativeMethods
     public const int WM_MOUSEMOVE = 0x0200;
     public const int WM_LBUTTONDOWN = 0x0201;
     public const int WM_LBUTTONUP = 0x0202;
+    public const int WM_CLIPBOARDUPDATE = 0x031D;
     public const int WM_NCCALCSIZE = 0x0083;
     public const int WM_NCHITTEST = 0x0084;
     public const int WM_NCLBUTTONDOWN = 0x00A1;
@@ -1940,6 +2097,8 @@ internal static class NativeMethods
     public const int VK_TAB = 0x09;
     public const int VK_RETURN = 0x0D;
     public const int VK_ESCAPE = 0x1B;
+    public const int VK_SHIFT = 0x10;
+    public const int VK_CONTROL = 0x11;
     public const int VK_MENU = 0x12;
     public const int VK_LEFT = 0x25;
     public const int VK_UP = 0x26;
@@ -1951,7 +2110,9 @@ internal static class NativeMethods
     public const int VK_RWIN = 0x5C;
     public const int VK_C = 0x43;
     public const int VK_L = 0x4C;
+    public const int VK_S = 0x53;
     public const int VK_V = 0x56;
+    public const int VK_Z = 0x5A;
     public const int VK_DELETE = 0x2E;
     public const int VK_HOME = 0x24;
     public const int VK_END = 0x23;
@@ -2038,6 +2199,12 @@ internal static class NativeMethods
 
     [DllImport("user32.dll")]
     public static extern IntPtr SetFocus(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool AddClipboardFormatListener(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool RemoveClipboardFormatListener(IntPtr hWnd);
 
     [DllImport("user32.dll")]
     public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);

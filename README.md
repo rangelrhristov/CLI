@@ -56,13 +56,15 @@ CLI.exe
 
 ## Dictation Support
 
-CLI keeps a hidden host-owned input field focused and forwards text into the selected terminal pane. This avoids dictation tools accidentally triggering Codex CLI paste-image or copy-response shortcuts.
+CLI keeps a tiny host-owned input field focused and forwards text into the selected terminal pane. This avoids dictation tools accidentally triggering Codex CLI paste-image or copy-response shortcuts.
 
 Click a pane, then type or dictate normally. Input is routed into the selected Codex session.
 
-For Wispr Flow on Windows, the default push-to-talk shortcut is `Ctrl+Win`, and Paste Last Transcript is `Shift+Alt+Z`. CLI keeps focus on its hidden input while the app is active so those paste-based insertion paths land in the host first, then get forwarded to the selected Codex pane as plain text.
+For Wispr Flow on Windows, the default push-to-talk shortcut is `Ctrl+Win`, and Paste Last Transcript is `Shift+Alt+Z`. CLI keeps focus on its input sink while the app is active so those paste-based insertion paths land in the host first, then get forwarded to the selected Codex pane as plain text.
 
 CLI also blocks Codex TUI shortcuts that conflict with dictation paste flows, including `Ctrl+V`, `Ctrl+C`, and `Ctrl+L`, while an embedded terminal is the active foreground target.
+
+If Wispr falls back to copying the transcript to the clipboard, CLI watches for that text immediately after a Wispr-style shortcut and injects it into the selected pane once, instead of letting Codex interpret the paste shortcut as an image or copy command.
 
 ## Notes
 
