@@ -47,7 +47,7 @@ The first run creates `.dictator-venv`, installs Python dependencies, and downlo
 Usage:
 
 - Click `dictate` to start recording, then click `stop` to transcribe and type into the previous active app.
-- Or press `Ctrl+Alt+Space` to toggle recording without touching the floating control.
+- Or press `Ctrl+Windows` to toggle recording without touching the floating control.
 - If typing into an elevated app fails, run the dictator elevated as well; Windows blocks lower-integrity apps from injecting input into admin windows.
 
 ## Requirements

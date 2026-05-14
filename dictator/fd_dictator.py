@@ -16,7 +16,7 @@ APP_ROOT = Path(__file__).resolve().parent
 MODEL_DIR = APP_ROOT / "models" / "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
 SAMPLE_RATE = 16000
 CHANNELS = 1
-HOTKEY = "<ctrl>+<alt>+<space>"
+HOTKEY = "<ctrl>+<cmd>"
 
 
 user32 = ctypes.windll.user32
