@@ -4,6 +4,10 @@ dist-electron
 coverage
 *.log
 .vite
+.dictator-venv
+dictator/models
+dictator/__pycache__
+*.pyc
 artifacts-*.png
 codex-workroom-dev.*.log
 CodexTerminalRoom.last.log

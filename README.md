@@ -31,11 +31,31 @@ You can also run the current built executable directly:
 .\CLI.exe
 ```
 
+## System-Wide Dictation
+
+`FD Dictator` is a separate local dictation app for the whole PC. It uses the English-only NVIDIA Parakeet TDT 0.6B v2 model through `sherpa-onnx`, records from your default microphone, and types text into the last active window with Win32 `SendInput`. It does not use clipboard paste.
+
+Run it with:
+
+```powershell
+cd C:\IDE
+.\Open-Dictator.bat
+```
+
+The first run creates `.dictator-venv`, installs Python dependencies, and downloads the Parakeet model into `dictator\models`. The model download is roughly 630 MB and is kept out of git.
+
+Usage:
+
+- Click `dictate` to start recording, then click `stop` to transcribe and type into the previous active app.
+- Or press `Ctrl+Alt+Space` to toggle recording without touching the floating control.
+- If typing into an elevated app fails, run the dictator elevated as well; Windows blocks lower-integrity apps from injecting input into admin windows.
+
 ## Requirements
 
 - Windows
 - Windows Terminal
 - Codex CLI available on PATH
+- Python 3.12 for `FD Dictator`
 - .NET Framework C# compiler, usually available at:
 
 ```text
