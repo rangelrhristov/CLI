@@ -662,6 +662,22 @@ internal sealed class HostForm : Form
         return foreground == Handle || NativeMethods.IsChild(Handle, foreground);
     }
 
+    public bool ShouldHandleKeyboardForwarding()
+    {
+        if (IsDisposed)
+        {
+            return false;
+        }
+
+        var foreground = NativeMethods.GetForegroundWindow();
+        if (foreground == Handle || NativeMethods.IsChild(Handle, foreground))
+        {
+            return true;
+        }
+
+        return terminals.Any(terminal => terminal.OwnsWindow(foreground));
+    }
+
     public void FocusDictationInput()
     {
         if (!dictationBox.IsDisposed && !dictationBox.Focused && !IsRenamingPane())
@@ -1125,6 +1141,28 @@ internal sealed class EmbeddedTerminal
         return headerStrip.RectangleToScreen(headerStrip.ClientRectangle).Contains(point);
     }
 
+    public bool OwnsWindow(IntPtr window)
+    {
+        if (window == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        if (window == hwnd || NativeMethods.IsChild(hwnd, window) || NativeMethods.IsChild(host.Handle, window))
+        {
+            return true;
+        }
+
+        if (rootProcessId <= 0)
+        {
+            return false;
+        }
+
+        uint processId;
+        NativeMethods.GetWindowThreadProcessId(window, out processId);
+        return processId != 0 && ProcessTree.ContainsProcess(rootProcessId, (int)processId);
+    }
+
     public bool ForwardKey(int virtualKey)
     {
         if (hwnd == IntPtr.Zero)
@@ -1141,6 +1179,12 @@ internal sealed class EmbeddedTerminal
         if (IsPasteShortcut(virtualKey))
         {
             TryPasteClipboardText(target);
+            return true;
+        }
+
+        if (IsBlockedCodexShortcut(virtualKey))
+        {
+            NoteForwardedKey(NativeMethods.VK_V);
             return true;
         }
 
@@ -1216,6 +1260,17 @@ internal sealed class EmbeddedTerminal
     {
         return (virtualKey == NativeMethods.VK_V && Control.ModifierKeys.HasFlag(Keys.Control)) ||
                (virtualKey == NativeMethods.VK_INSERT && Control.ModifierKeys.HasFlag(Keys.Shift));
+    }
+
+    private static bool IsBlockedCodexShortcut(int virtualKey)
+    {
+        if (!Control.ModifierKeys.HasFlag(Keys.Control))
+        {
+            return false;
+        }
+
+        return virtualKey == NativeMethods.VK_C ||
+               virtualKey == NativeMethods.VK_L;
     }
 
     private bool TryPasteClipboardText(IntPtr target)
@@ -1545,9 +1600,7 @@ internal sealed class KeyboardForwarder : IDisposable
             return NativeMethods.CallNextHookEx(hook, code, wParam, lParam);
         }
 
-        var cursorOnHost = host.RectangleToScreen(host.ClientRectangle).Contains(Cursor.Position) && host.IsPointActuallyOnHost(Cursor.Position);
-        var foregroundIsHost = host.IsForegroundActuallyHost();
-        if (!cursorOnHost && !foregroundIsHost)
+        if (!host.ShouldHandleKeyboardForwarding())
         {
             return NativeMethods.CallNextHookEx(hook, code, wParam, lParam);
         }
@@ -1557,9 +1610,13 @@ internal sealed class KeyboardForwarder : IDisposable
             return NativeMethods.CallNextHookEx(hook, code, wParam, lParam);
         }
 
-        if (Form.ActiveForm != host && !foregroundIsHost)
+        if (Form.ActiveForm != host && !host.IsForegroundActuallyHost())
         {
-            return NativeMethods.CallNextHookEx(hook, code, wParam, lParam);
+            var terminalForeground = terminals.Any(item => item.OwnsWindow(NativeMethods.GetForegroundWindow()));
+            if (!terminalForeground)
+            {
+                return NativeMethods.CallNextHookEx(hook, code, wParam, lParam);
+            }
         }
 
         var terminal = host.ActiveTerminal;
@@ -1704,6 +1761,18 @@ internal static class ProcessTree
         catch
         {
             return null;
+        }
+    }
+
+    public static bool ContainsProcess(int rootProcessId, int candidateProcessId)
+    {
+        try
+        {
+            return NativeMethods.GetProcessTreeIds(rootProcessId).Contains(candidateProcessId);
+        }
+        catch
+        {
+            return false;
         }
     }
 }
@@ -1880,6 +1949,8 @@ internal static class NativeMethods
     public const int VK_F4 = 0x73;
     public const int VK_LWIN = 0x5B;
     public const int VK_RWIN = 0x5C;
+    public const int VK_C = 0x43;
+    public const int VK_L = 0x4C;
     public const int VK_V = 0x56;
     public const int VK_DELETE = 0x2E;
     public const int VK_HOME = 0x24;
