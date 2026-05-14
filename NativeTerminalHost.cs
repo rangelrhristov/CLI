@@ -110,6 +110,7 @@ internal sealed class HostForm : Form
     private readonly TableLayoutPanel grid = new TableLayoutPanel();
     private readonly TextBox dictationBox = new TextBox();
     private readonly Label inputStatus = new Label();
+    private readonly System.Windows.Forms.Timer focusGuardTimer = new System.Windows.Forms.Timer();
     private bool forwardingDictationText;
     private KeyboardForwarder keyboardForwarder;
     private MousePaneActivator mousePaneActivator;
@@ -223,6 +224,10 @@ internal sealed class HostForm : Form
         };
         topBar.Controls.Add(inputStatus);
 
+        focusGuardTimer.Interval = 250;
+        focusGuardTimer.Tick += delegate { MaintainDictationFocus(); };
+        focusGuardTimer.Start();
+
         grid.Dock = DockStyle.Fill;
         grid.BackColor = Color.Black;
         grid.Padding = new Padding(6);
@@ -253,6 +258,7 @@ internal sealed class HostForm : Form
                 mousePaneActivator.Dispose();
                 mousePaneActivator = null;
             }
+            focusGuardTimer.Stop();
             foreach (var terminal in terminals)
             {
                 terminal.Close();
@@ -261,6 +267,12 @@ internal sealed class HostForm : Form
         keyboardForwarder = new KeyboardForwarder(this, terminals);
         mousePaneActivator = new MousePaneActivator(this, terminals);
         MarkInitialTerminalActive();
+    }
+
+    protected override void OnActivated(EventArgs e)
+    {
+        base.OnActivated(e);
+        FocusDictationInput();
     }
 
     private void ToggleMaximized()
@@ -652,10 +664,28 @@ internal sealed class HostForm : Form
 
     public void FocusDictationInput()
     {
-        if (!dictationBox.IsDisposed && !dictationBox.Focused)
+        if (!dictationBox.IsDisposed && !dictationBox.Focused && !IsRenamingPane())
         {
             dictationBox.Focus();
         }
+    }
+
+    private void MaintainDictationFocus()
+    {
+        if (IsDisposed || !IsForegroundActuallyHost() || IsRenamingPane())
+        {
+            return;
+        }
+
+        if (!dictationBox.Focused)
+        {
+            dictationBox.Focus();
+        }
+    }
+
+    private bool IsRenamingPane()
+    {
+        return terminals.Any(terminal => terminal.IsRenaming);
     }
 
     private void UpdateInputStatus()
@@ -888,6 +918,11 @@ internal sealed class EmbeddedTerminal
     public string DisplayName
     {
         get { return name; }
+    }
+
+    public bool IsRenaming
+    {
+        get { return nameEditor.Visible || nameEditor.Focused; }
     }
 
     public void StartAsync()
@@ -1214,7 +1249,7 @@ internal sealed class EmbeddedTerminal
 
     private static string ReadClipboardTextWithRetry()
     {
-        for (var attempt = 0; attempt < 8; attempt++)
+        for (var attempt = 0; attempt < 20; attempt++)
         {
             try
             {
@@ -1227,7 +1262,7 @@ internal sealed class EmbeddedTerminal
             {
                 // Dictation tools can briefly lock or replace the clipboard while pasting.
             }
-            Thread.Sleep(35);
+            Thread.Sleep(50);
         }
         return "";
     }
