@@ -644,6 +644,12 @@ internal sealed class HostForm : Form
         return window == Handle || NativeMethods.IsChild(Handle, window);
     }
 
+    public bool IsForegroundActuallyHost()
+    {
+        var foreground = NativeMethods.GetForegroundWindow();
+        return foreground == Handle || NativeMethods.IsChild(Handle, foreground);
+    }
+
     public void FocusDictationInput()
     {
         if (!dictationBox.IsDisposed && !dictationBox.Focused)
@@ -1504,12 +1510,9 @@ internal sealed class KeyboardForwarder : IDisposable
             return NativeMethods.CallNextHookEx(hook, code, wParam, lParam);
         }
 
-        if (!host.RectangleToScreen(host.ClientRectangle).Contains(Cursor.Position) || !host.IsPointActuallyOnHost(Cursor.Position))
-        {
-            return NativeMethods.CallNextHookEx(hook, code, wParam, lParam);
-        }
-
-        if (!host.ContainsFocus)
+        var cursorOnHost = host.RectangleToScreen(host.ClientRectangle).Contains(Cursor.Position) && host.IsPointActuallyOnHost(Cursor.Position);
+        var foregroundIsHost = host.IsForegroundActuallyHost();
+        if (!cursorOnHost && !foregroundIsHost)
         {
             return NativeMethods.CallNextHookEx(hook, code, wParam, lParam);
         }
@@ -1519,7 +1522,7 @@ internal sealed class KeyboardForwarder : IDisposable
             return NativeMethods.CallNextHookEx(hook, code, wParam, lParam);
         }
 
-        if (Form.ActiveForm != host)
+        if (Form.ActiveForm != host && !foregroundIsHost)
         {
             return NativeMethods.CallNextHookEx(hook, code, wParam, lParam);
         }
@@ -1956,6 +1959,9 @@ internal static class NativeMethods
 
     [DllImport("user32.dll")]
     public static extern IntPtr WindowFromPoint(Point point);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
 
     [DllImport("user32.dll")]
     public static extern bool IsChild(IntPtr parent, IntPtr child);
